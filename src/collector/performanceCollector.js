@@ -17,6 +17,7 @@ class PerformanceCollector {
     this.resourceObserver = null;
     this.longTaskObserver = null;
     this.memoryInterval = null;
+    this._memoryLoadHandler = null;
   }
   
   init() {
@@ -157,7 +158,8 @@ class PerformanceCollector {
     };
     
     // 页面加载完成后收集一次内存信息
-    window.addEventListener('load', collectMemory);
+    this._memoryLoadHandler = collectMemory;
+    window.addEventListener('load', this._memoryLoadHandler);
     
     // 定期收集内存信息（每30秒）
     this.memoryInterval = setInterval(collectMemory, 30000);
@@ -182,6 +184,11 @@ class PerformanceCollector {
     
     if (this.memoryInterval) {
       clearInterval(this.memoryInterval);
+    }
+
+    if (this._memoryLoadHandler) {
+      window.removeEventListener('load', this._memoryLoadHandler);
+      this._memoryLoadHandler = null;
     }
     
     eventBus.emit('collector:performance:destroyed');

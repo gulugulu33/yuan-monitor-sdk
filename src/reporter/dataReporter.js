@@ -6,108 +6,158 @@ class DataReporter {
     this.queue = [];
     this.timer = null;
     this.retryCount = {};
+    this._boundHandlers = {};  // 保存绑定后的回调引用，用于正确取消订阅
+    this._unloadHandler = null;
   }
-  
+
   init() {
-    eventBus.on('error:captured', this.reportError.bind(this));
-    eventBus.on('performance:web-vital', this.reportPerformance.bind(this));
-    eventBus.on('performance:resource', this.reportPerformance.bind(this));
-    eventBus.on('performance:long-task', this.reportPerformance.bind(this));
-    eventBus.on('performance:memory', this.reportPerformance.bind(this));
-    eventBus.on('behavior:breadcrumb', this.reportBehavior.bind(this));
-    
+    // 保存绑定后的回调引用，确保 off 时能正确匹配
+    this._boundHandlers = {
+      errorCaptured: this._reportError.bind(this),
+      webVital: this._reportPerformance.bind(this),
+      resource: this._reportPerformance.bind(this),
+      longTask: this._reportPerformance.bind(this),
+      memory: this._reportPerformance.bind(this),
+      breadcrumb: this._reportBehavior.bind(this)
+    };
+
+    eventBus.on('error:captured', this._boundHandlers.errorCaptured);
+    eventBus.on('performance:web-vital', this._boundHandlers.webVital);
+    eventBus.on('performance:resource', this._boundHandlers.resource);
+    eventBus.on('performance:long-task', this._boundHandlers.longTask);
+    eventBus.on('performance:memory', this._boundHandlers.memory);
+    eventBus.on('behavior:breadcrumb', this._boundHandlers.breadcrumb);
+
+    // 页面卸载时上报剩余数据
+    this._unloadHandler = () => this._onPageUnload();
+    window.addEventListener('visibilitychange', this._unloadHandler);
+    window.addEventListener('pagehide', this._unloadHandler);
+
     eventBus.emit('reporter:initialized');
   }
-  
+
+  /**
+   * 页面卸载时上报队列中的剩余数据
+   */
+  _onPageUnload() {
+    if (document.visibilityState === 'hidden' && this.queue.length > 0) {
+      this.flushQueue();
+    }
+  }
+
   addToQueue(data) {
     if (!data || !this.config.serverUrl) return;
-    
+
     this.queue.push(data);
-    
-    // 如果队列超过最大限制，立即上报
+
+    // 队列超过最大限制，立即上报
     if (this.queue.length >= this.config.reporter.maxQueueSize) {
       this.flushQueue();
       return;
     }
-    
-    // 如果队列达到批量大小，立即上报
+
+    // 队列达到批量大小，立即上报
     if (this.queue.length >= this.config.reporter.batchSize) {
       this.flushQueue();
       return;
     }
-    
+
     // 设置定时上报
     this.scheduleFlush();
   }
-  
+
   scheduleFlush() {
     if (this.timer) return;
-    
+
     this.timer = setTimeout(() => {
       this.flushQueue();
     }, this.config.reporter.batchInterval);
   }
-  
+
   flushQueue() {
     if (this.queue.length === 0) return;
-    
+
     const batchData = [...this.queue];
     this.queue = [];
-    
+
     // 清除定时器
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    
+
     this.report(batchData);
   }
-  
-  reportError(errorData) {
+
+  _reportError(errorData) {
+    // 通过 EventBus 同步获取面包屑
+    const breadcrumbs = eventBus.emit('behavior:getBreadcrumbs') || [];
+
+    // 提取可序列化的错误信息，避免循环引用导致 JSON.stringify 失败
+    const safeErrorData = {
+      type: errorData.type,
+      message: errorData.message,
+      stack: errorData.stack,
+      source: errorData.source,
+      lineno: errorData.lineno,
+      colno: errorData.colno,
+      tagName: errorData.tagName,
+      url: errorData.url,
+      componentStack: errorData.componentStack,  // React ErrorBoundary
+      info: errorData.info,                      // Vue errorHandler
+      outerHTML: errorData.outerHTML,            // 资源加载错误
+      componentName: errorData.componentName,    // Vue/React 组件名
+      context: errorData.context                 // 手动上报的上下文
+    };
+
     const data = {
       type: 'error',
       subType: errorData.type,
       timestamp: Date.now(),
-      ...errorData,
-      breadcrumbs: eventBus.emit('behavior:getBreadcrumbs') || []
+      errorData: safeErrorData,
+      breadcrumbs
     };
-    
+
     this.addToQueue(data);
   }
-  
-  reportPerformance(performanceData) {
+
+  _reportPerformance(performanceData) {
     const data = {
       type: 'performance',
       subType: performanceData.type,
       timestamp: Date.now(),
       ...performanceData
     };
-    
+
     this.addToQueue(data);
   }
-  
-  reportBehavior(behaviorData) {
-    // 行为数据通常作为面包屑随错误一起上报，但也可以单独上报
-    if (this.config.behavior.enable) {
-      const data = {
-        type: 'behavior',
-        subType: behaviorData.type,
-        timestamp: Date.now(),
-        ...behaviorData
-      };
-      
-      this.addToQueue(data);
-    }
+
+  _reportBehavior(behaviorData) {
+    if (!this.config.behavior.enable) return;
+
+    const data = {
+      type: 'behavior',
+      subType: behaviorData.type,
+      timestamp: Date.now(),
+      ...behaviorData
+    };
+
+    this.addToQueue(data);
   }
-  
+
   report(data) {
     if (!data || !this.config.serverUrl) return;
-    
+
+    // 通过 EventBus 同步获取 sessionId 和 userId
+    const sessionId = eventBus.emit('core:getSessionId') || '';
+    const userId = eventBus.emit('core:getUserId') || '';
+    const userData = eventBus.emit('core:getUserData') || {};
+
     const reportData = {
       appKey: this.config.appKey,
-      sessionId: eventBus.emit('core:getSessionId') || '',
-      userId: eventBus.emit('core:getUserId') || '',
-      userData: eventBus.emit('core:getUserData') || {},
+      sessionId,
+      userId,
+      userData,
       data,
       timestamp: Date.now(),
       environment: {
@@ -122,10 +172,9 @@ class DataReporter {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
       }
     };
-    
+
     const serializedData = JSON.stringify(reportData);
-    
-    // 根据配置选择上报方式
+
     switch (this.config.reporter.reportMethod) {
       case 'beacon':
         this.reportBeacon(serializedData);
@@ -139,12 +188,12 @@ class DataReporter {
         break;
     }
   }
-  
+
   reportFetch(data) {
     if (!window.fetch) {
       return this.reportImage(data);
     }
-    
+
     fetch(`${this.config.serverUrl}/api/report`, {
       method: 'POST',
       headers: {
@@ -152,33 +201,33 @@ class DataReporter {
         'X-SDK-Internal': 'true'
       },
       body: data,
-      credentials: 'include'
+      credentials: 'include',
+      keepalive: true
     }).catch((error) => {
       this.handleReportError(data, error);
     });
   }
-  
+
   reportBeacon(data) {
     if (!window.navigator.sendBeacon) {
       return this.reportFetch(data);
     }
-    
+
     const blob = new Blob([data], { type: 'application/json' });
     const success = window.navigator.sendBeacon(`${this.config.serverUrl}/api/report`, blob);
     if (!success) {
       this.reportFetch(data);
     }
   }
-  
+
   reportImage(data) {
     try {
       const img = new Image();
       const encodedData = encodeURIComponent(data);
       const url = `${this.config.serverUrl}/api/report?data=${encodedData}`;
-      
+
       img.src = url;
       img.onload = () => {
-        // 清理图片元素
         img.onload = null;
         img.onerror = null;
       };
@@ -191,45 +240,53 @@ class DataReporter {
       this.handleReportError(data, error);
     }
   }
-  
+
   handleReportError(data, error) {
     const dataKey = JSON.stringify(data);
     const count = this.retryCount[dataKey] || 0;
-    
+
     if (count < this.config.reporter.retryCount) {
-      // 重试上报
       this.retryCount[dataKey] = count + 1;
-      
+
       setTimeout(() => {
         this.report(data);
-      }, this.config.reporter.retryDelay * Math.pow(2, count)); // 指数退避
+      }, this.config.reporter.retryDelay * Math.pow(2, count));
     } else {
-      // 超过重试次数，放弃上报
       delete this.retryCount[dataKey];
       eventBus.emit('reporter:report:failed', { data, error });
     }
   }
-  
+
   flush() {
     this.flushQueue();
   }
-  
+
   destroy() {
+    // 上报剩余数据
+    this.flushQueue();
+
+    // 使用保存的引用正确取消订阅
+    eventBus.off('error:captured', this._boundHandlers.errorCaptured);
+    eventBus.off('performance:web-vital', this._boundHandlers.webVital);
+    eventBus.off('performance:resource', this._boundHandlers.resource);
+    eventBus.off('performance:long-task', this._boundHandlers.longTask);
+    eventBus.off('performance:memory', this._boundHandlers.memory);
+    eventBus.off('behavior:breadcrumb', this._boundHandlers.breadcrumb);
+
+    // 移除页面卸载监听
+    if (this._unloadHandler) {
+      window.removeEventListener('visibilitychange', this._unloadHandler);
+      window.removeEventListener('pagehide', this._unloadHandler);
+      this._unloadHandler = null;
+    }
+
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    
-    // 上报剩余数据
-    this.flushQueue();
-    
-    eventBus.off('error:captured', this.reportError.bind(this));
-    eventBus.off('performance:web-vital', this.reportPerformance.bind(this));
-    eventBus.off('performance:resource', this.reportPerformance.bind(this));
-    eventBus.off('performance:long-task', this.reportPerformance.bind(this));
-    eventBus.off('performance:memory', this.reportPerformance.bind(this));
-    eventBus.off('behavior:breadcrumb', this.reportBehavior.bind(this));
-    
+
+    this._boundHandlers = {};
+
     eventBus.emit('reporter:destroyed');
   }
 }

@@ -1,9 +1,13 @@
 import eventBus from '../core/eventBus';
 
-// 使用函数式组件创建ErrorBoundary，避免直接依赖React
+/**
+ * 创建 ErrorBoundary 组件
+ * 接受 React 作为参数，避免 SDK 直接硬依赖 React
+ */
 const createErrorBoundary = (React) => {
   if (!React || !React.Component) {
-    throw new Error('React is required for ErrorBoundary');
+    console.warn('[Monitor] React 未找到，ErrorBoundary 不可用');
+    return null;
   }
 
   const { Component } = React;
@@ -13,15 +17,14 @@ const createErrorBoundary = (React) => {
       super(props);
       this.state = { hasError: false, error: null, errorInfo: null };
     }
-    
+
     static getDerivedStateFromError(error) {
       return { hasError: true, error };
     }
-    
+
     componentDidCatch(error, errorInfo) {
       this.setState({ errorInfo });
-      
-      // 捕获React组件错误
+
       const errorData = {
         type: 'react',
         message: error?.message || 'Unknown React error',
@@ -29,25 +32,22 @@ const createErrorBoundary = (React) => {
         stack: error?.stack,
         error
       };
-      
+
       eventBus.emit('error:captured', errorData);
-      
-      // 调用自定义错误处理函数
+
       if (this.props.onError) {
         this.props.onError(error, errorInfo);
       }
     }
-    
+
     render() {
       if (this.state.hasError) {
-        // 自定义错误UI
         if (this.props.fallback) {
-          return typeof this.props.fallback === 'function' 
+          return typeof this.props.fallback === 'function'
             ? this.props.fallback(this.state.error, this.state.errorInfo)
             : this.props.fallback;
         }
-        
-        // 默认错误UI
+
         return React.createElement('div', {
           style: {
             padding: '20px',
@@ -67,7 +67,7 @@ const createErrorBoundary = (React) => {
           )
         );
       }
-      
+
       return this.props.children;
     }
   }
@@ -81,45 +81,70 @@ class ReactIntegration {
     this.ErrorBoundary = null;
     this.React = null;
   }
-  
-  // 初始化React集成
+
   init() {
-    // 尝试动态导入React
-    try {
-      this.React = require('react');
-      this.ErrorBoundary = createErrorBoundary(this.React);
-    } catch (error) {
-      console.warn('React not found, ErrorBoundary will not be available');
-    }
-    
+    if (!this.config.framework.react) return;
+
+    // 尝试多种方式获取 React
+    this._loadReact();
+
     eventBus.emit('framework:react:integrated');
-    
-    return {
-      ErrorBoundary: this.ErrorBoundary
-    };
   }
-  
-  // 获取ErrorBoundary组件
+
+  /**
+   * 尝试加载 React，兼容 CommonJS 和 ESM
+   */
+  _loadReact() {
+    try {
+      // 方式1: CommonJS require
+      this.React = require('react');
+    } catch (e) {
+      // 方式2: 全局变量（CDN 引入场景）
+      if (typeof window !== 'undefined' && window.React) {
+        this.React = window.React;
+      }
+    }
+
+    if (this.React) {
+      this.ErrorBoundary = createErrorBoundary(this.React);
+    }
+  }
+
+  /**
+   * 获取 ErrorBoundary 组件
+   * 如果 React 尚未加载，返回 null
+   */
   getErrorBoundary() {
     if (!this.ErrorBoundary && this.React) {
       this.ErrorBoundary = createErrorBoundary(this.React);
     }
     return this.ErrorBoundary;
   }
-  
-  // 自动包装应用根组件
+
+  /**
+   * 设置 React 引用（供外部主动传入，解决动态加载场景）
+   */
+  setReact(React) {
+    if (!React) return;
+    this.React = React;
+    this.ErrorBoundary = createErrorBoundary(React);
+  }
+
+  /**
+   * 自动包装应用根组件
+   */
   wrapApp(AppComponent) {
     if (!AppComponent || !this.React) return AppComponent;
-    
+
     const ErrorBoundary = this.getErrorBoundary();
     if (!ErrorBoundary) return AppComponent;
-    
+
     const { Component } = this.React;
     const { createElement } = this.React;
-    
+
     return class WrappedApp extends Component {
       render() {
-        return createElement(ErrorBoundary, null, 
+        return createElement(ErrorBoundary, null,
           createElement(AppComponent, this.props)
         );
       }
