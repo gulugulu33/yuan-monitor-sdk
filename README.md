@@ -1,51 +1,55 @@
-# Yuan Monitor SDK
+# Yuan Monitor SDK + APM Platform
 
-前端应用监控SDK，支持 React 和 Vue 框架。提供错误监控、性能分析、用户行为追踪和录屏回放功能。
+前端监控全家桶：一套可独立发布的前端监控 **SDK**，加一个开箱即用的 **APM 可视化平台**（Express + SQLite 后端 / Vue 3 控制台），覆盖「采集 → 上报 → 聚合存储 → 分析回放」完整链路。
 
-## 功能特性
-
-### 错误监控
-- JavaScript 运行时错误捕获
-- Promise 拒绝处理
-- 资源加载错误检测
-- Vue 组件错误钩子
-- React ErrorBoundary 集成
-- Source Map 堆栈跟踪支持
-
-### 性能监控
-- Web Vitals 指标 (CLS, FCP, FID, LCP, TTFB)
-- 资源加载性能分析
-- 长任务检测
-- 内存使用跟踪
-- 自定义性能指标
-
-### 用户行为分析
-- 点击事件追踪
-- 路由变化监控
-- 网络请求拦截 (XHR/Fetch)
-- 控制台日志记录
-- 面包屑轨迹
-
-### 录屏回放
-- 使用 rrweb 进行页面交互录制
-- 用户操作回放
-- 输入框隐私脱敏
-- 错误关联的录制会话
-
-### 数据上报
-- 多种传输方式 (Fetch, Beacon, Image)
-- 批量上报，可配置间隔
-- 自动重试，指数退避
-- 采样率控制
-- 调试模式
-
-## 安装
-
-```bash
-npm install yuan-monitor-sdk
+```
+业务应用 (React / Vue)
+    │  引入 yuan-monitor-sdk
+    ▼
+上报接口 /api/report、/api/session-replay
+(Fetch / sendBeacon / Image GIF 自动降级)
+    │
+    ▼
+apm-platform/server ──► SQLite（错误指纹聚合 / 性能 / 行为 / 录屏）
+    │  查询统计 API
+    ▼
+apm-platform/web（Vue 3 控制台：总览 / 错误 / 性能 / 会话回放）
 ```
 
-## 快速开始
+## 仓库结构
+
+```
+├── src/                  # 监控 SDK 源码（可构建发布为 npm 包）
+├── test-react-app/       # SDK 联调测试应用（端口 5175）
+├── test-server.js        # SDK 联调用简易接收端（端口 3001）
+└── apm-platform/         # APM 平台
+    ├── server/           # Express + better-sqlite3（端口 3100）
+    │   ├── src/routes/       # 上报接口 + 查询统计 API
+    │   ├── src/services/     # 错误指纹聚合、数据清洗入库
+    │   ├── src/db/           # 建库脚本 + 访问层（WAL 模式）
+    │   └── scripts/seed.js   # 演示种子数据
+    └── web/              # Vue 3 + Vite + Element Plus + ECharts（端口 8080）
+        └── src/views/        # Dashboard / ErrorList / ErrorDetail / Performance / Replay
+```
+
+## 快速启动 APM 平台
+
+```bash
+# 1. 后端（端口 3100）
+cd apm-platform/server
+npm install
+npm run seed     # 可选：灌入演示数据
+npm start
+
+# 2. 前端控制台（端口 8080）
+cd apm-platform/web
+npm install
+npm run dev
+```
+
+打开 **http://localhost:8080** 即可看到平台（seed 数据含一个模拟电商应用 `demo-shop`：4 个聚合后的错误 Issue、Web Vitals、慢资源、长任务与一条可播放的会话录屏）。
+
+## SDK 接入
 
 ### React
 
@@ -57,14 +61,9 @@ import { init } from 'yuan-monitor-sdk';
 
 const monitor = init({
   appKey: 'your-app-key',
-  serverUrl: 'https://your-server.com/api/report',
-  framework: {
-    react: true
-  },
-  advanced: {
-    enableSessionReplay: true,
-    sessionReplaySampleRate: 1
-  }
+  serverUrl: 'http://localhost:3100/api/report',
+  framework: { react: true },
+  advanced: { enableSessionReplay: true, sessionReplaySampleRate: 1 }
 });
 
 const { ErrorBoundary } = monitor;
@@ -81,207 +80,91 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 ### Vue
 
 ```javascript
-import Vue from 'vue';
+import { createApp } from 'vue';
 import App from './App.vue';
 import { init } from 'yuan-monitor-sdk';
 
 const monitor = init({
   appKey: 'your-app-key',
-  serverUrl: 'https://your-server.com/api/report',
-  framework: {
-    vue: true
-  }
+  serverUrl: 'http://localhost:3100/api/report',
+  framework: { vue: true }
 });
 
-Vue.use(monitor);
-
-new Vue({
-  render: h => h(App)
-}).$mount('#app');
+createApp(App).use(monitor).mount('#app');
 ```
 
-## 配置选项
+SDK 上报的应用会按 `appKey` 自动注册到 APM 平台，无需手工配置。
 
-```javascript
-const config = {
-  appKey: 'your-app-key',
-  serverUrl: 'https://your-server.com/api/report',
-  sampleRate: 1,
-  debug: true,
+## SDK 功能特性
 
-  error: {
-    enable: true,
-    captureGlobalErrors: true,
-    capturePromiseRejections: true,
-    captureResourceErrors: true
-  },
+### 错误监控
+- JavaScript 运行时错误 / Promise 拒绝 / 资源加载错误捕获
+- Vue errorHandler、React ErrorBoundary 框架集成
+- Source Map 堆栈解析支持
 
-  performance: {
-    enable: true,
-    captureWebVitals: true,
-    captureResourceTiming: true,
-    captureLongTasks: true,
-    captureMemory: true
-  },
+### 性能监控
+- Web Vitals（LCP / FID / CLS / FCP / TTFB）
+- 资源加载耗时、长任务（LongTask 归因）、内存使用跟踪
+- 自定义性能指标
 
-  behavior: {
-    enable: true,
-    captureClicks: true,
-    captureRouteChanges: true,
-    captureNetworkRequests: true,
-    captureConsole: false,
-    maxBreadcrumbs: 20
-  },
+### 用户行为
+- 点击、路由变化、网络请求（XHR/Fetch）、控制台日志
+- 面包屑轨迹，随错误事件关联上报
 
-  advanced: {
-    enableSessionReplay: true,
-    sessionReplaySampleRate: 1,
-    blockSelector: '.monitor-block',
-    ignoreClass: 'monitor-ignore'
-  },
+### 会话录屏
+- 基于 rrweb 的页面操作录制
+- 输入框隐私脱敏、敏感元素屏蔽
+- 错误发生时刻定位，支持一键跳转回放
 
-  reporter: {
-    batchSize: 5,
-    batchInterval: 5000,
-    maxQueueSize: 20,
-    reportMethod: 'fetch',
-    retryCount: 3,
-    retryDelay: 1000
-  },
+### 上报策略
+- Fetch / sendBeacon / Image GIF 三通道自动降级
+- 批量合并、可配置间隔、失败重试（指数退避）
+- 采样率控制、调试模式
 
-  framework: {
-    vue: false,
-    react: false
-  }
-};
-```
+## APM 平台功能
 
-## API
+| 模块 | 能力 |
+|------|------|
+| 总览 Dashboard | 错误/用户数趋势、Web Vitals P75、Top Issues |
+| 错误分析 | 指纹聚合为 Issue（消息归一化 + 堆栈特征帧）、趋势与页面/用户分布、事件明细（堆栈、面包屑时间线、UA/环境）、状态流转（解决/忽略/重开） |
+| 性能分析 | 5 项 Web Vitals P50/P75/P95 与评级分布（Google 阈值）、时间分桶趋势、页面性能排行、慢资源列表、长任务归因脚本定位 |
+| 会话回放 | rrweb 播放器：进度拖拽、倍速、错误时刻标记与一键跳转；错误详情直连关联录屏 |
 
-### 初始化
-```javascript
-import { init } from 'yuan-monitor-sdk';
+## API 一览
 
-const monitor = init(config);
-```
+平台后端（端口 3100）：
 
-### 用户管理
-```javascript
-monitor.setUserId('user123');
-monitor.setUserData({
-  name: '张三',
-  email: 'zhangsan@example.com'
-});
-```
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| POST | `/api/report` | SDK 数据上报（fetch/beacon/image 均兼容） |
+| GET | `/api/report?data=...` | Image GIF 兜底上报通道 |
+| POST | `/api/session-replay` | 录屏数据上报 |
+| GET | `/api/apps` | 应用列表 |
+| GET | `/api/stats/overview` | 总览统计 |
+| GET | `/api/errors`、`/api/errors/:id` | Issue 列表 / 详情 |
+| GET | `/api/errors/:id/events` | 错误事件明细分页 |
+| PATCH | `/api/errors/:id/status` | Issue 状态流转 |
+| GET | `/api/stats/performance` | Web Vitals 统计与趋势 |
+| GET | `/api/performance/resources` | 慢资源列表 |
+| GET | `/api/performance/long-tasks` | 长任务列表 |
+| GET | `/api/replays`、`/api/replays/:id` | 会话列表 / 录屏数据 |
+| GET | `/api/sessions/:sessionId/replay` | 按会话 ID 获取录屏（错误详情跳转回放用） |
 
-### 手动上报
-```javascript
-monitor.reportError(new Error('自定义错误'), {
-  page: 'home',
-  component: 'Button'
-});
+## SDK 本地联调
 
-monitor.reportPerformance({
-  type: 'custom',
-  name: 'api-response-time',
-  value: 120
-});
-
-monitor.addBreadcrumb('custom', {
-  message: '用户执行了操作'
-});
-```
-
-### 控制方法
-```javascript
-const config = monitor.getConfig();
-monitor.setConfig({ debug: true });
-const sessionId = monitor.getSessionId();
-const breadcrumbs = monitor.getBreadcrumbs();
-monitor.clearBreadcrumbs();
-monitor.flush();
-monitor.destroy();
-```
-
-## 本地开发测试
-
-本项目包含一个完整的测试 Demo，用于验证 SDK 的各项功能。
-
-### 启动测试环境
-
-需要打开 **3 个终端**，分别执行以下命令：
-
-**终端 1 - 构建 SDK**
 ```bash
-cd /Users/a95722807/Documents/trae_projects/yuan-mon
+# 终端 1：构建 SDK
 npm run build
-```
 
-**终端 2 - 启动后端服务器 (端口 3001)**
-```bash
-cd /Users/a95722807/Documents/trae_projects/yuan-mon
+# 终端 2：联调接收端（端口 3001，仅打印/暂存上报数据）
 node test-server.js
-```
 
-**终端 3 - 启动前端测试应用 (端口 5175)**
-```bash
-cd /Users/a95722807/Documents/trae_projects/yuan-mon/test-react-app
+# 终端 3：测试应用（端口 5175）
+cd test-react-app
 npm run dev
 ```
 
-### 测试页面
-
-打开浏览器访问：**http://localhost:5175**
-
-测试页面包含以下功能区域：
-
-#### 错误测试区
-- **触发 JS 错误** - 模拟运行时 JavaScript 错误
-- **触发 Promise 拒绝** - 模拟未处理的 Promise 拒绝
-- **触发异步错误** - 模拟异步操作中的错误
-
-#### 性能测试区
-- **长任务测试** - 模拟超过 50ms 的长任务
-- **内存压力测试** - 模拟内存使用
-
-#### Session Replay 区
-- **开始录屏** - 开始录制用户操作
-- **停止并上报** - 停止录制并上报数据
-
-#### 其他测试区
-- **路由切换测试** - 模拟路由变化
-- **网络请求测试** - 模拟 XHR/Fetch 请求
-- **控制台输出** - 测试控制台日志捕获
-
-### 查看上报数据
-
-后端服务器提供以下 API 端点：
-
-| 方法 | 端点 | 描述 |
-|------|------|------|
-| POST | `/api/report` | 接收错误和性能数据 |
-| POST | `/api/session-replay` | 接收录屏数据 |
-| GET | `/api/data` | 获取所有接收的数据 |
-| DELETE | `/api/clear` | 清空所有数据 |
-
-访问 **http://localhost:3001/api/data** 可以查看所有上报的数据：
-
-```json
-{
-  "errors": [...],
-  "performance": [...],
-  "behavior": [...],
-  "sessionReplay": [...]
-}
-```
-
-### 测试流程
-
-1. 启动上述 3 个终端服务
-2. 打开 **http://localhost:5175**
-3. 点击页面上的测试按钮触发各种错误
-4. 观察终端 2 的输出，查看实时接收的数据
-5. 访问 **http://localhost:3001/api/data** 查看完整数据
+访问 **http://localhost:5175**，通过测试页按钮触发各类错误、长任务、录屏；**http://localhost:3001/api/data** 查看原始上报数据。
 
 ## 隐私保护
 
@@ -297,49 +180,13 @@ const config = {
 };
 ```
 
-```html
-<div class="private-info">敏感数据</div>
-<button class="no-monitor">忽略此按钮</button>
-<input type="password" data-monitor-mask />
-```
+- 录屏默认对密码输入框脱敏，支持按选择器屏蔽/忽略元素
+- SDK 不收集敏感个人信息，数据传输建议走 HTTPS
 
 ## 浏览器支持
 
-- Chrome (推荐)
-- Firefox
-- Safari
-- Edge
-- IE 11 (有限支持)
-
-## 项目结构
-
-```
-src/
-├── core/              # 核心功能
-│   ├── index.js       # 主入口
-│   ├── eventBus.js    # 事件通信
-│   └── sessionManager.js
-├── collector/         # 数据采集器
-│   ├── errorCollector.js
-│   ├── performanceCollector.js
-│   └── behaviorCollector.js
-├── advanced/          # 高级功能
-│   └── sessionReplay.js
-├── reporter/          # 数据上报
-│   └── dataReporter.js
-├── framework/         # 框架集成
-│   ├── reactIntegration.js
-│   └── vueIntegration.js
-└── utils/             # 工具函数
-    └── helpers.js
-```
-
-## 隐私声明
-
-- SDK 不会收集用户的敏感个人信息
-- 录屏功能默认对密码输入框进行脱敏处理
-- 用户可通过配置选择性地排除特定元素
-- 所有数据通过 HTTPS 安全传输
+- Chrome（推荐）/ Firefox / Safari / Edge
+- IE 11 有限支持
 
 ## License
 
